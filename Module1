@@ -1,0 +1,1034 @@
+Option Explicit
+
+Global chosenChangesCollection As Collection
+
+'Sheet names
+Private Const INFOPAGE_SHT_NAME As String = "Infopage"
+Private Const RESULT_SHT_NAME As String = "Result"
+Private Const MATRIX_SHT_NAME As String = "Matrix"
+Private Const CUSTOMER_MD_SHT_NAME As String = "Customer MD"
+Private Const SHARE_SHT_NAME As String = "Share overview"
+Private Const WORST_CASE_SHT_NAME As String = "Worst Case"
+
+'Message strings
+Private Const NO_CHANGES_SELECTED_MESSAGE As String = "You haven't selected any changes"
+Private Const NO_SHIPMENTS_FOUND_MESSAGE As String = "No shipments found for specified FPCs in the past 3 months"
+Private Const MISSING_DATA As String = "No data"
+Private Const UNKNOWN_CUSTOMER As String = "Unknown customer"
+Private Const EAN_HEADER_STRING As String = "EAN"
+Private Const BY_SU_HEADER_STRING As String = "P3M Sales, SU"
+Private Const SHARE_HEADER_STRING As String = "Share, %"
+Private Const HEADER_TOTAL As String = "Total"
+Private Const SHARE_BY_CUSTOMER_STRING As String = "Share by customer average for all FPCs"
+Private Const SALES_SU_STRING As String = "P3M Sales, SU"
+Private Const MIN_TIME As String = "Min time to fix, in weeks"
+Private Const MAX_TIME As String = "Max time to fix, in weeks"
+Private Const COMMENT_STRING As String = "Comment"
+Private Const UNKNOWN_CHANGE As String = "Unknown change"
+
+'Column numbers in the "Main" sheet
+Private Const MAIN_FPC_COLUMN_NUMBER As Integer = 1
+
+'Column numbers in "Infopage" sheet
+Private Const INFOPAGE_FPC_COL_NUMBER As Integer = 1 'FPC column number in Infopage sheet
+Private Const INFOPAGE_CUSTOMER_COL_NUMBER As Integer = 2 'Customer name column number in Infopage sheet
+Private Const INFOPAGE_FIRST_SALES_COLUMN As Integer = 3 'First column with sales data
+
+'Column numbers in "result" sheet
+Private Const RESULT_NAME_COLUMN_NUMBER As Integer = 1
+Private Const RESULT_SENSITIVE_COLUMN_NUMBER As Integer = 2
+Private Const RESULT_ACTIONS_COLUMN_NUMBER As Integer = 3
+Private Const RESULT_AUTOMATIC_COLUMN_NUMBER As Integer = 4
+Private Const RESULT_TIME_COLUMN_NUMBER As Integer = 5
+Private Const RESULT_POINVENTORY_COLUMN_NUMBER As Integer = 6
+Private Const RESULT_PIPIPELINE_COLUMN_NUMBER As Integer = 7
+Private Const RESULT_TRADESAMPLES_COLUMN_NUMBER As Integer = 8
+Private Const RESULT_COMMENT_COLUMN_NUMBER As Integer = 9
+Private Const RESULT_SHARE_COLUMN_NUMBER As Integer = 12
+Private Const RESULT_SALES_COLUMN_NUMBER As Integer = 13
+
+'Column numbers in "Share Overview" sheet
+Private Const SHARE_EAN_COLUMN_NUMBER As Integer = 1
+
+'Column number in "Matrix" sheet
+Private Const MATRIX_CUSTOMER_COLUMN As Integer = 1
+Private Const MATRIX_PIPO_TYPE_COLUMN As Integer = 2
+Private Const MATRIX_FIRST_SENSITIVITY_COLUMN As Integer = 3
+
+'Row numbers in Share Overview sheet
+Private Const TOTAL_SALES_HEADER_ROW_NUMBER As Integer = 1
+
+'Dimensions for user form
+Private Const MAX_FORM_HEIGHT As Integer = 400  'Max height that a userform should be
+
+Private Const TOP_MARGIN As Integer = 20   'Vertical margin between content and top border of userform
+Private Const BOTTOM_MARGIN As Integer = 20  'Vertical margin between content and bottom border of userform
+Private Const LEFT_MARGIN As Integer = 20   'Horizontal margin between category labels and left border of userform or previous column
+Private Const RIGHT_MARGIN As Integer = 20 'Horizontal margin between content and right border of userform
+
+Private Const MARGIN_CHECKBOX_OFFSET As Integer = 0   'Horizontal margin between category label and checkboxes
+Private Const MARGIN_BETWEEN_LABEL_BOX As Integer = 20 'Vertical margin between category name and following checkboxes
+Private Const MARGIN_BETWEEN_CHECKBOXES As Integer = 5 'Vertical margin between checkboxes
+
+
+
+Public Sub main()
+
+Application.ScreenUpdating = False
+
+Dim mainWb As Workbook
+Dim mainSht As Worksheet, infoSht As Worksheet, resultSht As Worksheet, customerMdSht As Worksheet, shareSht As Worksheet
+Dim matrixSht As Worksheet
+
+Dim collectionChanges As Collection, collectionCategory As Collection
+Dim eanCollection As Collection, fpcCollection As Collection
+Dim custShareCollection As Collection
+
+Dim collectionItem As cChange
+
+Dim fpcRange As Range
+Dim changeRng As Range
+
+Dim fpcLastRow As Integer
+Dim matrixLastRow As Long
+
+'' Reference all needed workbooks / worksheets
+Set mainWb = ActiveWorkbook
+Set mainSht = ActiveSheet
+Set infoSht = mainWb.Sheets(INFOPAGE_SHT_NAME)
+Set resultSht = mainWb.Sheets(RESULT_SHT_NAME)
+Set matrixSht = mainWb.Sheets(MATRIX_SHT_NAME)
+Set customerMdSht = mainWb.Sheets(CUSTOMER_MD_SHT_NAME)
+Set shareSht = mainWb.Sheets(SHARE_SHT_NAME)
+
+'' Clear all filters if there are any
+Dim currentSht As Worksheet
+For Each currentSht In ActiveWorkbook.Sheets
+    currentSht.AutoFilterMode = False
+Next currentSht
+
+'' Get a collection of all possible cChange objects from sensitivity matrix
+    
+    'Get the range of all changes
+    matrixLastRow = matrixSht.Cells(matrixSht.Rows.Count, MATRIX_PIPO_TYPE_COLUMN).End(xlUp).Row
+    Set changeRng = Range(matrixSht.Cells(2, MATRIX_PIPO_TYPE_COLUMN), matrixSht.Cells(matrixLastRow, MATRIX_PIPO_TYPE_COLUMN))
+
+    'Convert chosen range to Collection
+    Set collectionChanges = changesCollection(changeRng)
+
+'' Populate a collection of unique change category names
+Set collectionCategory = New Collection
+For Each collectionItem In collectionChanges
+    
+    'If current category already exists then skip
+    On Error Resume Next
+        collectionCategory.Add collectionItem.Category, collectionItem.Category
+    On Error GoTo 0
+    
+Next collectionItem
+
+'' Populate PipoForm with possible change checkboxes
+ChangesToUserForm collectionCategory, collectionChanges
+
+''Create a collection with all FPCs that are provided
+    
+    ''Reference the range with all FPCs
+    fpcLastRow = mainSht.Cells(mainSht.Rows.Count, MAIN_FPC_COLUMN_NUMBER).End(xlUp).Row
+    Set fpcRange = Range(mainSht.Cells(2, MAIN_FPC_COLUMN_NUMBER), mainSht.Cells(fpcLastRow, MAIN_FPC_COLUMN_NUMBER))
+    
+    ''Convert the range to collection
+    Set fpcCollection = RangeToCollection(fpcRange)
+
+''Convert FPC collection to EAN collection
+Set eanCollection = FPCtoEAN(fpcCollection, infoSht.Columns(INFOPAGE_FPC_COL_NUMBER))
+
+''Get a collection with all customers (cCustomer objects) with their sales/shares
+Set custShareCollection = GetCustomerShare(eanCollection, infoSht)
+
+''Load the userform to select changes
+PipoForm.Show
+
+''If user closed userfrom without selectig any changes then stop execution
+If chosenChangesCollection Is Nothing Then Exit Sub
+
+''Populate the sales/shares by FPC to the shares sheet
+GenerateShareSheet shareSht, custShareCollection, eanCollection
+
+''Populate the sensitivity results to the result sheet
+GenerateResult resultSht, custShareCollection, chosenChangesCollection
+
+''Freeze panes on the results sheet
+With ActiveWindow
+    If .FreezePanes Then .FreezePanes = False
+    .SplitColumn = 1
+    .SplitRow = 1
+    .FreezePanes = True
+End With
+
+''Set Nothing reference to the global collection
+Set chosenChangesCollection = Nothing
+
+Application.ScreenUpdating = True
+
+End Sub
+Private Function GenerateShareSheet(ByRef shareSht As Worksheet, ByRef customerCollection As Collection, ByRef eanCollection As Collection)
+'
+' Function that populates a Share overview sheet with sales shares by FPC
+' Arguments:    shareSht: destination sheet to display the result
+'               customerCollection: collection of all customers (cCustomer objects) with their sales/shares
+'               eanCollection: collection of all EANs
+
+Dim currEan As Variant
+Dim lastRow As Long
+Dim lastCol As Integer
+
+''Clean the sheet from previous data
+shareSht.Cells.ClearContents
+shareSht.Cells.ClearFormats
+
+''Add a header row. Format bold
+shareSht.Cells(TOTAL_SALES_HEADER_ROW_NUMBER, SHARE_EAN_COLUMN_NUMBER).Value2 = EAN_HEADER_STRING
+shareSht.Rows(TOTAL_SALES_HEADER_ROW_NUMBER).Font.Bold = True
+
+''For each EAN add rows with absolute sales and shares
+For Each currEan In eanCollection
+    
+    ''recalculate last row
+    lastRow = shareSht.Cells(shareSht.Rows.Count, SHARE_EAN_COLUMN_NUMBER).End(xlUp).Row
+    
+    ''print current EAN in the first column & format bold
+    With shareSht.Cells(lastRow + 2, SHARE_EAN_COLUMN_NUMBER)
+        .Value2 = CStr("'" & currEan)
+        .Font.Bold = True
+    End With
+    
+    ''add EAN description to the right of the EAN
+    Dim infopageFpcRng As Range
+    Set infopageFpcRng = ActiveWorkbook.Sheets(INFOPAGE_SHT_NAME).Columns(INFOPAGE_FPC_COL_NUMBER)
+    With shareSht.Cells(lastRow + 2, SHARE_EAN_COLUMN_NUMBER).Offset(0, 1)
+        .Value2 = eanToDescription(CStr(currEan), infopageFpcRng)
+        .Font.Bold = True
+    End With
+        
+    ''Get sales/shares for current EAN for each customer
+    Dim currCustomer As cCustomer
+    For Each currCustomer In customerCollection
+        
+        Dim customerColumn As Integer
+        
+        ''Find if column for current customer already exists. If not then add a new one with its name
+        On Error GoTo customer_not_found
+            customerColumn = Application.WorksheetFunction.Match(currCustomer.name, shareSht.Rows(TOTAL_SALES_HEADER_ROW_NUMBER), 0)
+        On Error GoTo 0
+        
+        ''Put headers for absolute sales / share rows
+        shareSht.Cells(lastRow + 3, SHARE_EAN_COLUMN_NUMBER).Value2 = BY_SU_HEADER_STRING
+        shareSht.Cells(lastRow + 4, SHARE_EAN_COLUMN_NUMBER).Value2 = SHARE_HEADER_STRING
+        
+        ''Put absolute sales & customer's share. Skip if current customer doesn't have shipments for current EAN
+        On Error Resume Next
+        
+            'Absolute sales
+            With shareSht.Cells(lastRow + 3, customerColumn)
+                .Value2 = currCustomer.eanSalesCollection.item(currEan)
+                .NumberFormat = "0.0"
+            End With
+        
+            'Customer's share
+            With shareSht.Cells(lastRow + 4, customerColumn)
+                .Value2 = currCustomer.eanShareCollection.item(currEan)
+                .NumberFormat = "0.0%"
+            End With
+            
+        On Error GoTo 0
+        
+    Next currCustomer
+    
+Next currEan
+
+'' Add total for each customer
+
+    ''Recalculate last row
+    lastRow = shareSht.Cells(shareSht.Rows.Count, SHARE_EAN_COLUMN_NUMBER).End(xlUp).Row
+            
+    ''Print Total header
+    shareSht.Cells(lastRow + 2, SHARE_EAN_COLUMN_NUMBER).Value2 = HEADER_TOTAL
+    shareSht.Cells(lastRow + 2, SHARE_EAN_COLUMN_NUMBER).Font.Bold = True
+    
+    For Each currCustomer In customerCollection
+            
+            customerColumn = Application.WorksheetFunction.Match(currCustomer.name, shareSht.Rows(TOTAL_SALES_HEADER_ROW_NUMBER), 0)
+            
+            ''Put headers for absolute sales / share rows
+            shareSht.Cells(lastRow + 3, SHARE_EAN_COLUMN_NUMBER).Value2 = BY_SU_HEADER_STRING
+            shareSht.Cells(lastRow + 4, SHARE_EAN_COLUMN_NUMBER).Value2 = SHARE_HEADER_STRING
+            
+            ''Put absolute sales & customer's share. Skip if current customer doesn't have shipments for current EAN
+            On Error Resume Next
+            
+                'Absolute sales
+                With shareSht.Cells(lastRow + 3, customerColumn)
+                    .Value2 = currCustomer.sales
+                    .NumberFormat = "0.0"
+                End With
+            
+                'Customer's share
+                With shareSht.Cells(lastRow + 4, customerColumn)
+                    .Value2 = currCustomer.share
+                    .NumberFormat = "0.0%"
+                End With
+                
+            On Error GoTo 0
+            
+    Next currCustomer
+    
+''Put borders for all used cells
+Range(shareSht.Cells(TOTAL_SALES_HEADER_ROW_NUMBER, SHARE_EAN_COLUMN_NUMBER), shareSht.Cells(lastRow + 4, lastCol + 1)).Borders.LineStyle = xlSolid
+        
+Exit Function
+
+''Add a column for a new customer with its name to the right when customer not found
+customer_not_found:
+    lastCol = shareSht.Cells(TOTAL_SALES_HEADER_ROW_NUMBER, shareSht.Columns.Count).End(xlToLeft).Column
+    customerColumn = lastCol + 1
+    shareSht.Cells(TOTAL_SALES_HEADER_ROW_NUMBER, customerColumn).Value2 = currCustomer.name
+    Resume Next
+
+End Function
+Private Function GenerateResult(ByRef resultSht As Worksheet, ByRef customerCollection As Collection, ByRef changesCollection As Collection)
+'
+' Function that generates final result on the "result" sheet based on collection of customers and changes
+' Arguments:    resultSht: destination sheet to populate the result to
+'               customerCollection: collection of all customers (cCustomer objects) with their sales/shares
+'               changesCollection: collection of all changes selected by user
+'
+
+Dim lastRow As Long, lastColMatrix As Integer, lastColResult As Integer
+Dim i As Integer
+
+Dim change As Variant
+Dim customer As cCustomer
+
+Dim matrixSht As Worksheet
+Dim worstCaseSht As Worksheet
+
+Set matrixSht = ActiveWorkbook.Sheets(MATRIX_SHT_NAME)
+Set worstCaseSht = ActiveWorkbook.Sheets(WORST_CASE_SHT_NAME)
+
+''Clear the results sheet from previously generated data.
+
+With resultSht.Cells
+    .ClearContents
+    .ClearFormats
+End With
+
+''Copy headers from matrix sheet
+
+    ''Calculate last column in Matrix sheet
+    lastColMatrix = matrixSht.Cells(1, matrixSht.Columns.Count).End(xlToLeft).Column
+
+    ''Copy headers from matrix sheet to result sheet with specified offset
+    For i = MATRIX_FIRST_SENSITIVITY_COLUMN To lastColMatrix
+        resultSht.Cells(1, i - 1).Value2 = matrixSht.Cells(1, i).Value2
+    Next i
+    
+    ''Calculate last column in the Result sheet after copying headers
+    lastColResult = resultSht.Cells(1, resultSht.Columns.Count).End(xlToLeft).Column
+    
+    ''Add headers for 2 additional columns to the right
+    resultSht.Cells(1, lastColResult + 1).Value2 = SHARE_BY_CUSTOMER_STRING
+    resultSht.Cells(1, lastColResult + 2).Value2 = SALES_SU_STRING
+
+''Calculate last row in results sheet
+lastRow = resultSht.Cells(resultSht.Rows.Count, 1).End(xlUp).Row
+
+''add worst case scenario to changes collection
+changesCollection.Add "Worst case"
+
+''Iterate through all changes
+For Each change In changesCollection
+
+    ''Add a row with change description
+    resultSht.Cells(lastRow + 1, RESULT_NAME_COLUMN_NUMBER).Value2 = change
+    
+    ''Format the row with change name
+    With Range(resultSht.Cells(lastRow + 1, 1), resultSht.Cells(lastRow + 1, RESULT_SALES_COLUMN_NUMBER))
+        .Font.Bold = True
+        .Interior.Color = 65535
+    End With
+    
+    ''Recalculate last row
+    lastRow = resultSht.Cells(resultSht.Rows.Count, RESULT_NAME_COLUMN_NUMBER).End(xlUp).Row
+    
+    ''Iterate through all customers
+    For Each customer In customerCollection
+    
+        ''Find current customer/change combination in sensitivity matrix and determine index of this row
+        Dim rowIndex As Integer
+        rowIndex = 0
+        For i = 1 To matrixSht.Cells(matrixSht.Rows.Count, MATRIX_PIPO_TYPE_COLUMN).End(xlUp).Row
+            If Trim(matrixSht.Cells(i, MATRIX_CUSTOMER_COLUMN)) = Trim(customer.name) And Trim(matrixSht.Cells(i, MATRIX_PIPO_TYPE_COLUMN)) = Trim(change) Then rowIndex = i
+        Next i
+        
+        ''Add customer name
+        resultSht.Cells(lastRow + 1, RESULT_NAME_COLUMN_NUMBER).Value2 = customer.name
+        
+        ''Add customer share & format
+        resultSht.Cells(lastRow + 1, RESULT_SHARE_COLUMN_NUMBER).Value2 = customer.share
+        resultSht.Cells(lastRow + 1, RESULT_SHARE_COLUMN_NUMBER).NumberFormat = "0.0%"
+        
+        ''Add customer sales & format
+        resultSht.Cells(lastRow + 1, RESULT_SALES_COLUMN_NUMBER).Value2 = customer.sales
+        resultSht.Cells(lastRow + 1, RESULT_SALES_COLUMN_NUMBER).NumberFormat = "0.0"
+        
+        
+        ''Add all sensitivity data for all columns/customers/changes
+          
+        For i = 2 To lastColResult
+            
+            Dim strSensitivity As String, strSensitivityField As String
+            
+            '' Determine the sensitivity field string
+            strSensitivityField = matrixSht.Cells(1, i + 1).Value2
+            
+            '' If not "worst case" customer then copy sensitivity from matrix
+            If change <> "Worst case" Then
+                
+                '' If sensitivity for current change/customer has been found in sensitivity matrix
+                If rowIndex > 0 Then
+                
+                    ''Determine sensitivity value for current customer and field
+                    strSensitivity = matrixSht.Cells(rowIndex, i + 1).Value2
+                            
+                    ''Calculate the worst case integer index of this sensitivity
+                        
+                        Dim worstCaseRow As Integer, worstCaseCol As Integer, worstCaseIndex As Integer
+                        worstCaseIndex = 0
+                            
+                        ''Calculate row/column and value at intersection
+                        If Trim(strSensitivityField) = MIN_TIME Or Trim(strSensitivityField) = MAX_TIME Then
+                                
+                            ''If min/max time then index = sensitivity string
+                            If strSensitivity = "" Then worstCaseIndex = 0 Else worstCaseIndex = strSensitivity
+        
+                        ElseIf Trim(strSensitivityField) = COMMENT_STRING Then
+                                
+                            ''If "comment" field then put a negative index since no worst case is needed
+                            worstCaseIndex = -1
+                            
+                        Else
+                            
+                            ''Otherwise calculate worst case index at needed intersection
+                            worstCaseRow = Application.WorksheetFunction.Match(strSensitivity, worstCaseSht.Columns(1), 0)
+                            worstCaseCol = Application.WorksheetFunction.Match(strSensitivityField, worstCaseSht.Rows(1), 0)
+                            worstCaseIndex = worstCaseSht.Cells(worstCaseRow, worstCaseCol)
+                            
+                        End If
+                            
+                            
+                    ''Copy sensitivity from the matrix to the result sheet
+                    resultSht.Cells(lastRow + 1, i) = strSensitivity
+                        
+                    ''Copy formatting
+                    matrixSht.Cells(rowIndex, i + 1).Copy: resultSht.Cells(lastRow + 1, i).PasteSpecial xlPasteFormats
+                            
+                    ''Update the worst case collection for current customer
+                    updateWorstCase customer.worstCaseCollection, strSensitivityField, worstCaseIndex
+
+                Else
+                    ''If customer/change combination is not found then put a missing data message and format as red font
+                    With resultSht.Cells(lastRow + 1, i)
+                        .Value2 = MISSING_DATA
+                        .Font.Color = 2315454
+                        .Font.Italic = True
+                        .Font.Bold = True
+                    End With
+                
+                End If
+                
+            Else
+                ''If "worst case" customer then retrieve the worst case value for this customer/change
+                resultSht.Cells(lastRow + 1, i).Value2 = worstCase(customer, strSensitivityField, worstCaseSht)
+                
+                ''Copy conditional formatting from 3d row
+                resultSht.Cells(3, i).Copy
+                resultSht.Cells(lastRow + 1, i).PasteSpecial xlFormats
+                
+                
+            End If
+                               
+        Next i
+
+        ''Recalculate last row
+        lastRow = resultSht.Cells(resultSht.Rows.Count, RESULT_NAME_COLUMN_NUMBER).End(xlUp).Row
+        
+    Next customer
+    
+Next change
+
+
+''Format header row
+With Range(resultSht.Cells(1, 1), resultSht.Cells(1, RESULT_SALES_COLUMN_NUMBER))
+    .Font.Bold = True
+    .Interior.Color = 12632256
+End With
+
+''Format used range in sheet
+lastRow = resultSht.Cells(resultSht.Rows.Count, RESULT_NAME_COLUMN_NUMBER).End(xlUp).Row
+With Range(resultSht.Cells(1, 1), resultSht.Cells(lastRow, RESULT_SALES_COLUMN_NUMBER))
+    .VerticalAlignment = xlCenter
+    .WrapText = True
+    .Borders.LineStyle = xlContinuous
+End With
+
+
+End Function
+
+Private Function updateWorstCase(worstCaseCollection As Collection, strField As String, intValue As Integer)
+'
+' Function that updates the worstCaseCollection of a certain customer with given value/key.
+'
+' Arguments:    worstCaseCollection: target collection to update
+'               strField: the key string of an element in the collection to update
+'               value: the value vs. which the element should be updated
+
+Dim intCurrentValue As Integer
+
+'' Retrieve current value for the key. If key doesn't exist then add it.
+On Error GoTo add_worst_case
+    intCurrentValue = worstCaseCollection(strField)
+On Error GoTo 0
+
+'' Check if new value is lower (worse) than current value
+If intValue > intCurrentValue Then
+    
+    '' If yes then replace the old value with the new one with the same key
+    With worstCaseCollection
+        .Remove strField
+        .Add intValue, strField
+    End With
+    
+End If
+
+Exit Function
+
+''If provided key doesn't exist in the collection then add the value with this key
+add_worst_case:
+    worstCaseCollection.Add intValue, strField
+
+
+End Function
+
+Private Function worstCase(customer As cCustomer, strField As String, worstCaseSht As Worksheet) As Variant
+'
+' Function that returns the worst case value for given customer and sensitivityField
+' Arguments:    customer: cCustomer object representing the needed customer
+'               strField: sensitivity field to check
+'
+
+Dim worstCaseIndex As Integer, worstCaseCol As Integer, worstCaseRow As Integer
+
+'' If unknown customer then return blank field
+If customer.name = UNKNOWN_CUSTOMER Then
+    worstCase = ""
+    Exit Function
+End If
+
+'' determine the index for this customer/field. If no worst case exists for current customer then return blank
+On Error GoTo no_worst_case
+    worstCaseIndex = customer.worstCaseCollection(strField)
+On Error GoTo 0
+
+'' if negative index ("Comment" field) or then return blank
+If worstCaseIndex = -1 Then
+    worstCase = ""
+    Exit Function
+End If
+
+'' If min/max time then return the exact time in weeks
+If Trim(strField) = MIN_TIME Or Trim(strField) = MAX_TIME Then
+    worstCase = worstCaseIndex
+Else
+    
+'' find value corresponding to this index
+    worstCaseCol = Application.Match(strField, worstCaseSht.Rows(1), 0)
+    worstCaseRow = Application.Match(worstCaseIndex, worstCaseSht.Columns(worstCaseCol), 0)
+    worstCase = worstCaseSht.Cells(worstCaseRow, 1)
+    
+End If
+
+Exit Function
+
+no_worst_case:
+
+    ''return blank in case no worst case found for the customer
+    worstCase = ""
+
+End Function
+
+
+Private Function changesCollection(ByRef changeRng As Range) As Collection
+'
+' Function that converts a range with Pipo Changes Types to a collection of cChange of objects
+' Arguments:    changeRng: range that contains string descriptions of all Pipo changes
+'
+'
+
+Dim i As Integer
+ 
+Set changesCollection = New Collection
+
+'' Iterate through all cells in the source range
+Dim cell As Range
+For Each cell In changeRng.Cells
+
+    Dim currentChange As cChange
+    Dim strDescription As String, strCategory As String
+    
+    ''Determine change description = string in cell
+    strDescription = cell.Value2
+    
+    ''Determine change category based on description
+    strCategory = getCategory(cell.Value2)
+    
+    ''Create new cChange object and assign needed properties
+    Set currentChange = New cChange
+    With currentChange
+        .Description = strDescription
+        .Category = strCategory
+    End With
+    
+    '' Add new object to collection with a unique key to avoid duplication. On error skip if such object already exists
+    On Error Resume Next
+        changesCollection.Add currentChange, currentChange.Description
+    On Error GoTo 0
+    
+Next cell
+
+End Function
+
+Private Function getCategory(descr As String) As String
+'
+' Function that determines PIPO change category from description (before ":" sign). If no ":" sign - returns "Unknown change"
+' Arguments:    descr: string with PIPO descrittion
+'
+
+On Error GoTo category_handler
+    
+    
+    If InStr(1, descr, ":") = 0 Then
+        ''If description doesn't contain ":" sign then assign unknown change description
+        getCategory = UNKNOWN_CHANGE
+    Else
+        ''If ":" exists then category = part of description before the ":" sign
+        getCategory = Left(descr, InStr(1, descr, ":") - 1)
+    End If
+
+On Error GoTo 0
+
+Exit Function
+
+category_handler:
+    getCategory = UNKNOWN_CHANGE
+
+
+End Function
+
+Private Function ChangesToUserForm(ByRef categoryNameCollection As Collection, ByRef changeObjectCollection As Collection)
+
+'
+' Function that populates a userform with check boxes for each possible change
+' Arguments:    categoryNameCollection: collection of strings representing different PIPO change categories
+'               changeObjectCollection: collection of cChange objects representing a separate PIPO change
+'
+
+Dim iItem As Variant
+Dim verticalOffset As Integer
+Dim horizontalOffset As Integer
+
+verticalOffset = TOP_MARGIN 'distance between the data and the top border of the userform
+
+''Iterate thorugh each category name
+For Each iItem In categoryNameCollection
+    
+    '' Add a label for category name
+    Dim lLabel As MSForms.Label
+    Set lLabel = PipoForm.Controls.Add("Forms.Label.1", "catLabel", True)
+    
+    '' Set label text/formatting/location
+    With lLabel
+        .Caption = iItem 'category name
+        .Top = verticalOffset
+        .Left = horizontalOffset + LEFT_MARGIN
+        .Font.Bold = True
+        .AutoSize = True
+    End With
+    
+    '' Determine top location of the first checkbox
+    verticalOffset = verticalOffset + lLabel.Height + MARGIN_BETWEEN_LABEL_BOX
+       
+    '' Iterate though all changes
+    Dim currChange As cChange
+    For Each currChange In changeObjectCollection
+             
+        ''If change belongs to current category then add it to the form
+        If currChange.Category = iItem Then
+                     
+            ''Add a new checkbox
+            Dim cCheckBox As MSForms.checkBox
+            Set cCheckBox = PipoForm.Controls.Add("Forms.CheckBox.1", "chkBox", True)
+
+            ''Set checkbox location and text
+            With cCheckBox
+                .Top = verticalOffset
+                .Left = horizontalOffset + LEFT_MARGIN + MARGIN_CHECKBOX_OFFSET
+                .Caption = currChange.Description
+                .AutoSize = True
+            End With
+                
+            ''Adjust PipoForm Height/Width
+            PipoForm.Height = Application.Max(PipoForm.Height, cCheckBox.Top + cCheckBox.Height + BOTTOM_MARGIN + PipoForm.Height - PipoForm.InsideHeight)
+            PipoForm.Width = Application.Max(PipoForm.Width, cCheckBox.Left + cCheckBox.Width + RIGHT_MARGIN + LEFT_MARGIN)
+            
+            ''Determine top position of next checkbox
+            verticalOffset = cCheckBox.Top + cCheckBox.Height + MARGIN_BETWEEN_CHECKBOXES
+            
+            ''If userform reached max height then move to next column
+            If verticalOffset >= MAX_FORM_HEIGHT Then
+                verticalOffset = TOP_MARGIN
+                horizontalOffset = horizontalOffset + 150
+            End If
+            
+            
+        End If
+             
+    Next currChange
+    
+    ''Switch to new column for next category
+    verticalOffset = TOP_MARGIN
+    horizontalOffset = horizontalOffset + 150
+
+    
+Next iItem
+
+End Function
+
+Private Function RangeToCollection(sourceRng As Range) As Collection
+'
+' Function that returns a collection of Strings from a provided range
+' Arguments:    sourceRng: source range of Strings
+'
+
+Set RangeToCollection = New Collection
+
+Dim sCell As Range
+
+For Each sCell In sourceRng
+    RangeToCollection.Add sCell.Value2
+Next sCell
+
+
+End Function
+
+Private Function FPCtoEAN(ByRef fpcCollection As Collection, ByRef sourceRng As Range) As Collection
+'
+' Functiont that converts a collection of FPCs to a collection of EANs
+' fpcCollection = collection of FPCs to convert
+' sourceRng = a range of FPC-Description-EAN strings from Infopage
+'
+
+Dim cCell As Range
+Dim fpcString As Variant
+
+Set FPCtoEAN = New Collection
+
+''Iterate through each FPC in source collection
+For Each fpcString In fpcCollection
+
+    ''Search through source range and find cells containing current FPC
+    Set cCell = sourceRng.Find(What:=fpcString, _
+                                LookIn:=xlValues, _
+                                LookAt:=xlPart, _
+                                SearchOrder:=xlByRows, _
+                                SearchDirection:=xlNext, _
+                                MatchCase:=False)
+                                
+    ''If FPC was found then convert full infopage code description to EAN and add to collection
+    If Not cCell Is Nothing Then
+        Dim ean As String
+        ean = InfoPageToEan(cCell.Value2)
+        FPCtoEAN.Add ean
+        'Debug.Print ("EAN " & ean & " for FPC " & fpcString & " was added")
+    End If
+
+Next fpcString
+
+
+End Function
+
+Private Function InfoPageToEan(str As String) As String
+'
+' Function that converts Infopage Product Description to EAN number
+' Arguments:    str: source Infopage Product Description string
+'
+
+
+str = Trim(str)
+InfoPageToEan = Mid(str, Len(str) - 13, 13)
+
+End Function
+
+
+Private Function GetCustomerShare(ByRef eanCollection As Collection, ByRef infoSht As Worksheet) As Collection
+'
+' Function that returns a Collection of cCustomer objects with total sales/share and sales/shares by EAN
+' Arguments:    eanCollection: collection of all EANs to process
+'               infoSht: reference to an infopage sheet containing sales data
+'
+
+
+Dim lastRow As Integer
+Dim lastCol As Integer
+
+Dim i As Integer
+
+Dim totalSum As Double
+Dim totalSumCollection As New Collection 'Collection of total sales by EAN (key)
+
+
+''Find last row and column in Infopage sheet
+lastRow = infoSht.Cells(infoSht.Rows.Count, 1).End(xlUp).Row
+lastCol = infoSht.Cells(1, infoSht.Columns.Count).End(xlToLeft).Column
+
+''Initialize collection
+Set GetCustomerShare = New Collection
+
+''Iterate through all rows of the infopage sheet
+For i = 2 To lastRow
+    
+    Dim currEan As Variant
+    
+    ''Check through each EAN in the collection
+    For Each currEan In eanCollection
+    
+        ''If FPC description contains current EAN
+        If InStr(1, infoSht.Cells(i, INFOPAGE_FPC_COL_NUMBER).Value2, currEan) > 0 Then
+            
+            ''Calculate sum of sales for all months in the Infopage sheet
+            Dim sumSalesPastMonths As Double
+            sumSalesPastMonths = Application.WorksheetFunction.Sum(Range(infoSht.Cells(i, INFOPAGE_FIRST_SALES_COLUMN), infoSht.Cells(i, lastCol)))
+            
+            ''Add culculated sales to the total sum of sales for all EANs
+            totalSum = totalSum + sumSalesPastMonths
+            
+            ''Add sales by EAN to the total sum collection
+            Dim salesForEan As Double
+            salesForEan = 0
+            On Error GoTo ean_not_found
+            
+                '' Add calculated sales to the total sum of sales for this EAN
+                salesForEan = totalSumCollection.item(currEan) + sumSalesPastMonths
+                
+                '' Old sales with new ones with EAN key
+                totalSumCollection.Remove (currEan)
+                totalSumCollection.Add salesForEan, currEan
+                
+            On Error GoTo 0
+            
+            ''Determine the customer of the current row
+            Dim customerName As String
+            customerName = convertCustomerName(infoSht.Cells(i, INFOPAGE_CUSTOMER_COL_NUMBER))
+            
+            ''If customer doesn't exist in the collection yet then add. If exists then update the sales
+            On Error GoTo AddNewCustomer
+                UpdateSales GetCustomerShare, customerName, sumSalesPastMonths, currEan
+            On Error GoTo 0
+            
+        End If
+    
+    Next currEan
+    
+Next i
+
+
+''if no shipments found for any EAN then exist
+If totalSum <= 0 Then
+    MsgBox NO_SHIPMENTS_FOUND_MESSAGE
+    End
+End If
+
+''Iterate through all customers to calculate sales shares (total & by EAN)
+
+Dim currCustomer As cCustomer
+For Each currCustomer In GetCustomerShare
+    
+    ''Add share of total sales
+    currCustomer.share = currCustomer.sales / totalSum
+    
+    ''Iterate through all EANs to calculate share for each EAN
+    For Each currEan In eanCollection
+    
+        Dim currEanShare As Double
+        Dim shareCollection As Collection
+        currEanShare = 0
+        
+        ''Calculate share of current customer in total sales for this EAN. Skip if customer doesn't have sales for this EAN
+        If totalSumCollection.item(currEan) > 0 Then
+            On Error GoTo no_sales_for_ean_handler
+                currEanShare = currCustomer.eanSalesCollection.item(currEan) / totalSumCollection.item(currEan)
+            On Error GoTo 0
+        End If
+        
+        ''Add calculated share to the collection of shares by EAN
+        currCustomer.eanShareCollection.Add currEanShare, currEan
+       
+skip_ean:
+       
+    Next currEan
+    
+Next currCustomer
+
+Exit Function
+
+''In case no sales for current EAN exist for this customer then skip calculating share
+no_sales_for_ean_handler:
+    
+    Resume skip_ean
+
+''Adds new cCustomer object to the collection if it doesn't exist yet
+AddNewCustomer:
+    
+    ''Initialize new cCustomer object
+    Dim cCust As cCustomer
+    Set cCust = New cCustomer
+    
+    ''Set name
+    cCust.name = customerName
+    
+    ''Set total sales volume
+    cCust.sales = sumSalesPastMonths
+    
+    ''Initialize collections
+    cCust.eanSalesCollection = New Collection
+    cCust.eanShareCollection = New Collection
+    cCust.worstCaseCollection = New Collection
+    
+    ''Add sales for current EAN to the collection
+    cCust.eanSalesCollection.Add sumSalesPastMonths, currEan
+    
+    ''Add customer to the collection with its name as a key
+    GetCustomerShare.Add cCust, cCust.name
+    
+    'Debug.Print ("Added new customer: " & cCust.name)
+    'Debug.Print ("Total shipments for " & cCust.name & " updated to " & cCust.sales & " EAN " & currEan & " updated to " & cCust.eanSalesCollection.item(currEan))
+
+    Resume Next
+    
+''If current EAN is not in total sum collection then add it
+ean_not_found:
+        totalSumCollection.Add sumSalesPastMonths, currEan
+        salesForEan = sumSalesPastMonths
+        Resume Next
+
+End Function
+
+Private Function convertCustomerName(infopageName As String) As String
+'
+' Function that converts InfoPage name to Sensitivity matrix name. Returns "Unknown customer" if not found.
+' Arguments:    infopageName: customer name as in Infopage
+'
+Dim customerMdSht As Worksheet
+Set customerMdSht = ActiveWorkbook.Sheets(CUSTOMER_MD_SHT_NAME)
+
+''Vlookup infopage name to normal name from MD sheet. If not found then assign "Unknown customer"
+On Error GoTo not_found_error
+    convertCustomerName = Application.WorksheetFunction.VLookup(infopageName, customerMdSht.Range("A:B"), 2, 0)
+On Error GoTo 0
+
+Exit Function
+
+''If not found then assign "Unknown customer"
+not_found_error:
+    convertCustomerName = UNKNOWN_CUSTOMER
+
+End Function
+
+Private Function UpdateSales(coll As Collection, nameKey As String, addValue As Double, ean As Variant)
+'
+' Function that updates sales (total and by EAN) of the specified customer. Customer is determined by its name String (key)
+' Arguments:    coll: Collection of all customer objects
+'
+'               addValue: sum of sales that needs to be added to current sales
+'               ean: EAN for which sales volume needs to be updated
+
+''Reference needed customer from the collection via the key
+Dim cCust As cCustomer
+Set cCust = coll.item(nameKey)
+
+''Update total sales volume
+cCust.sales = cCust.sales + addValue
+
+''Update sales for current EAN. If sales for current EAN are not found in the collection then add
+On Error GoTo ean_not_found
+    
+    ''Calculate new sales volume for this ean
+    Dim newSalesVolume As Double
+    newSalesVolume = cCust.eanSalesCollection.item(ean) + addValue
+    
+    ''Replace old value with new one
+    cCust.eanSalesCollection.Remove (ean)
+    cCust.eanSalesCollection.Add newSalesVolume, ean
+    
+On Error GoTo 0
+
+'Debug
+'Debug.Print ("Total shipments for " & cCust.name & " updated to " & cCust.sales & " EAN " & ean & " updated to " & cCust.eanSalesCollection.item(ean))
+
+Exit Function
+
+'If sales for current EAN are not found in the collection then add
+ean_not_found:
+    cCust.eanSalesCollection.Add addValue, ean
+
+End Function
+
+Private Function eanToDescription(ean As String, conversionRange As Range)
+'
+'Function that converts ean to full product description as in infopage
+'Arguments: ean - string with EAN
+'           converstionRange - range that contains product descriptions to search for
+'
+
+Dim cCell As Range
+
+''Search through the conversion range and find a first cell containing current EAN
+Set cCell = conversionRange.Find(What:=ean, _
+                            LookIn:=xlValues, _
+                            LookAt:=xlPart, _
+                            SearchOrder:=xlByRows, _
+                            SearchDirection:=xlNext, _
+                            MatchCase:=False)
+                                
+''If EAN was found then convert full EAN to full Infopage description
+If Not cCell Is Nothing Then
+    eanToDescription = cCell.Value2
+End If
+
+
+End Function
+
+Private Function debugCollection(ByRef coll As Collection)
+'
+' Debugger function that displays all items of a collection of cCustomer objects
+'
+'
+
+Dim collObj As Variant
+Dim counter As Integer
+counter = 1
+For Each collObj In coll
+    Debug.Print ("Index: " & counter & "; name: " & collObj.name & "; sales: " & collObj.sales & "; share: " & Format(collObj.share, "0.00%"))
+    counter = counter + 1
+Next collObj
+    
+End Function
