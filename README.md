@@ -1,2 +1,2 @@
 # pipo-sensitivity-tool
-PIPO sensitivity tool for automatic PIPO management
+PIPO sensitivity tool which supports new product launch
