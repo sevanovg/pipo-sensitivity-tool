@@ -1,2 +1,2 @@
 # pipo-sensitivity-tool
-PIPO sensitivity tool for Microsoft Excel VBA. The tool's purpose is to support new product launches.
+VBA based tool to support new product launches in FMCG. Helps the supply chain team to plan product phase-in/phase-out based on customer sensitivity to product changes.
